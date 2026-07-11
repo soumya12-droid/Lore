@@ -1,5 +1,9 @@
 package com.soumya.lore.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,19 +16,26 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.soumya.lore.data.exampleQueries
 import com.soumya.lore.data.recentSearches
 import com.soumya.lore.ui.components.LoreSearchField
@@ -34,16 +45,44 @@ import com.soumya.lore.ui.theme.LoreTheme
 /**
  * Entry screen. Owns the search-field text as local state — nothing else
  * in the app needs it, so hoisting it further up would add indirection
- * with no benefit.
+ * with no benefit. Voice input state lives in [HomeViewModel] since it
+ * involves recording + a network call that should survive recomposition.
  */
 @Composable
 fun HomeScreen(
     onSearch: (query: String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    viewModel: HomeViewModel = viewModel()
 ) {
     var query by remember { mutableStateOf("") }
+    val voiceState by viewModel.voiceState.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
 
-    Scaffold(modifier = modifier) { innerPadding ->
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) viewModel.onMicPressed() else viewModel.onPermissionDenied()
+    }
+
+    LaunchedEffect(voiceState) {
+        when (val state = voiceState) {
+            is VoiceState.Transcribed -> {
+                query = state.transcript
+                viewModel.consumeTranscript()
+            }
+            is VoiceState.Error -> {
+                snackbarHostState.showSnackbar(state.message)
+                viewModel.dismissError()
+            }
+            else -> Unit
+        }
+    }
+
+    Scaffold(
+        modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -84,7 +123,20 @@ fun HomeScreen(
                     value = query,
                     onValueChange = { query = it },
                     onSearch = { if (query.isNotBlank()) onSearch(query) },
-                    onMicClick = { /* voice input comes later */ }
+                    onMicClick = {
+                        val hasPermission = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.RECORD_AUDIO
+                        ) == PackageManager.PERMISSION_GRANTED
+
+                        if (hasPermission) {
+                            viewModel.onMicPressed()
+                        } else {
+                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
+                    isRecording = voiceState is VoiceState.Recording,
+                    isTranscribing = voiceState is VoiceState.Transcribing
                 )
 
                 Column(modifier = Modifier.padding(top = 16.dp, bottom = 24.dp)) {

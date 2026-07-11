@@ -3,12 +3,14 @@ package com.soumya.lore.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -25,9 +27,10 @@ import com.soumya.lore.ui.theme.LoreOutline
  * The primary search field for Lore. Deliberately larger and more rounded
  * than a default text field so it reads as the "hero" element on Home.
  *
- * The mic button is intentionally small, outlined, and neutral-colored —
- * it should never compete visually with search itself (see design brief:
- * "search product first, voice product second").
+ * The mic button is intentionally small and neutral-colored at rest — it
+ * should never compete visually with search itself (see design brief:
+ * "search product first, voice product second"). While recording it turns
+ * emerald, matching the design system's rule that emerald marks active state.
  */
 @Composable
 fun LoreSearchField(
@@ -35,7 +38,9 @@ fun LoreSearchField(
     onValueChange: (String) -> Unit,
     onSearch: () -> Unit,
     onMicClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isRecording: Boolean = false,
+    isTranscribing: Boolean = false
 ) {
     OutlinedTextField(
         value = value,
@@ -58,12 +63,24 @@ fun LoreSearchField(
             )
         },
         trailingIcon = {
-            IconButton(onClick = onMicClick) {
-                Icon(
-                    imageVector = Icons.Default.Mic,
-                    contentDescription = "Voice search",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            IconButton(onClick = onMicClick, enabled = !isTranscribing) {
+                if (isTranscribing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = if (isRecording) "Stop recording" else "Voice search",
+                        tint = if (isRecording) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                }
             }
         },
         singleLine = true,
