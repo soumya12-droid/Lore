@@ -4,29 +4,39 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -36,11 +46,18 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.soumya.lore.data.exampleQueries
 import com.soumya.lore.data.recentSearches
+import com.soumya.lore.ui.components.LoadMoreRow
 import com.soumya.lore.ui.components.LoreSearchField
 import com.soumya.lore.ui.components.RecentSearchChip
+import com.soumya.lore.ui.theme.LoreOutline
 import com.soumya.lore.ui.theme.LoreTheme
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+
+private const val RECENT_SEARCHES_PAGE_SIZE = 4
+private val RECENT_SEARCHES_CHIP_HEIGHT = 44.dp
+private val RECENT_SEARCHES_CHIP_SPACING = 8.dp
 
 /**
  * Entry screen. Owns the search-field text as local state — nothing else
@@ -55,9 +72,37 @@ fun HomeScreen(
     viewModel: HomeViewModel = viewModel()
 ) {
     var query by remember { mutableStateOf("") }
+    var visibleRecentCount by remember { mutableIntStateOf(RECENT_SEARCHES_PAGE_SIZE) }
     val voiceState by viewModel.voiceState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // Stage 1 ("query detachment"): search field shrinks and fades while the
+    // query text detaches into a floating capsule that lifts slightly, then
+    // the whole screen fades — before handing off to the Loading screen,
+    // which continues the capsule's morph into a graph node.
+    var isTransitioning by remember { mutableStateOf(false) }
+    val fieldScale = remember { Animatable(1f) }
+    val fieldAlpha = remember { Animatable(1f) }
+    val capsuleAlpha = remember { Animatable(0f) }
+    val capsuleOffsetY = remember { Animatable(0f) }
+    val screenAlpha = remember { Animatable(1f) }
+
+    fun triggerSearch(submittedQuery: String) {
+        if (isTransitioning || submittedQuery.isBlank()) return
+        isTransitioning = true
+        scope.launch {
+            coroutineScope {
+                launch { fieldScale.animateTo(0.95f, tween(350, easing = FastOutSlowInEasing)) }
+                launch { fieldAlpha.animateTo(0f, tween(300)) }
+                launch { capsuleAlpha.animateTo(1f, tween(300)) }
+                launch { capsuleOffsetY.animateTo(-20f, tween(350, easing = FastOutSlowInEasing)) }
+            }
+            screenAlpha.animateTo(0f, tween(180))
+            onSearch(submittedQuery)
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -87,7 +132,8 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 24.dp),
+                .padding(horizontal = 24.dp)
+                .graphicsLayer { alpha = screenAlpha.value },
         ) {
             // --- Header ---
             Column(
@@ -119,47 +165,61 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                LoreSearchField(
-                    value = query,
-                    onValueChange = { query = it },
-                    onSearch = { if (query.isNotBlank()) onSearch(query) },
-                    onMicClick = {
-                        val hasPermission = ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.RECORD_AUDIO
-                        ) == PackageManager.PERMISSION_GRANTED
+                Box(contentAlignment = Alignment.Center) {
+                    LoreSearchField(
+                        value = query,
+                        onValueChange = { query = it },
+                        onSearch = { triggerSearch(query) },
+                        onMicClick = {
+                            val hasPermission = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.RECORD_AUDIO
+                            ) == PackageManager.PERMISSION_GRANTED
 
-                        if (hasPermission) {
-                            viewModel.onMicPressed()
-                        } else {
-                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            if (hasPermission) {
+                                viewModel.onMicPressed()
+                            } else {
+                                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        },
+                        isRecording = voiceState is VoiceState.Recording,
+                        isTranscribing = voiceState is VoiceState.Transcribing,
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = fieldScale.value
+                            scaleY = fieldScale.value
+                            alpha = fieldAlpha.value
                         }
-                    },
-                    isRecording = voiceState is VoiceState.Recording,
-                    isTranscribing = voiceState is VoiceState.Transcribing
-                )
+                    )
 
-                Column(modifier = Modifier.padding(top = 16.dp, bottom = 24.dp)) {
-                    exampleQueries.forEach { example ->
-                        Text(
-                            text = example,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                        )
+                    if (capsuleAlpha.value > 0f) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(1.dp, LoreOutline),
+                            modifier = Modifier.graphicsLayer {
+                                alpha = capsuleAlpha.value
+                                translationY = capsuleOffsetY.value.dp.toPx()
+                            }
+                        ) {
+                            Text(
+                                text = query,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)
+                            )
+                        }
                     }
                 }
 
                 Button(
-                    onClick = { if (query.isNotBlank()) onSearch(query) },
+                    onClick = { triggerSearch(query) },
+                    enabled = !isTransitioning,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     ),
-                    modifier = Modifier.padding(top = 8.dp)
+                    modifier = Modifier.padding(top = 16.dp)
                 ) {
                     Text("Search")
                 }
@@ -169,25 +229,41 @@ fun HomeScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 24.dp)
+                    .padding(bottom = 40.dp)
             ) {
                 Text(
                     text = "Recent Searches",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 12.dp)
+                    modifier = Modifier.padding(bottom = 4.dp)
                 )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
+                        .height(
+                            RECENT_SEARCHES_CHIP_HEIGHT * RECENT_SEARCHES_PAGE_SIZE +
+                                RECENT_SEARCHES_CHIP_SPACING * (RECENT_SEARCHES_PAGE_SIZE - 1)
+                        ),
+                    verticalArrangement = Arrangement.spacedBy(RECENT_SEARCHES_CHIP_SPACING)
                 ) {
-                    recentSearches.forEach { search ->
+                    items(recentSearches.take(visibleRecentCount)) { search ->
                         RecentSearchChip(
                             label = search,
-                            onClick = { onSearch(search) }
+                            onClick = {
+                                query = search
+                                triggerSearch(search)
+                            }
                         )
+                    }
+                    if (visibleRecentCount < recentSearches.size) {
+                        item {
+                            LoadMoreRow(
+                                onClick = {
+                                    visibleRecentCount = (visibleRecentCount + RECENT_SEARCHES_PAGE_SIZE)
+                                        .coerceAtMost(recentSearches.size)
+                                }
+                            )
+                        }
                     }
                 }
 
@@ -198,7 +274,7 @@ fun HomeScreen(
                     textAlign = TextAlign.Center,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 24.dp)
+                        .padding(top = 20.dp)
                 )
             }
         }

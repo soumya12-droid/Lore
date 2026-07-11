@@ -1,5 +1,8 @@
 package com.soumya.lore.navigation
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -52,7 +55,13 @@ fun AppNavigation() {
 
         composable(
             route = RESULT_ROUTE,
-            arguments = listOf(navArgument(QUERY_ARG) { type = NavType.StringType })
+            arguments = listOf(navArgument(QUERY_ARG) { type = NavType.StringType }),
+            // Fast, minimal fade rather than the default slide/crossfade —
+            // the Loading screen already ends on a static card silhouette
+            // matching Result's AnswerCard, so this should read as a
+            // continuation of that animation, not a screen change.
+            enterTransition = { fadeIn(tween(120)) },
+            exitTransition = { fadeOut(tween(80)) }
         ) { backStackEntry ->
             val query = backStackEntry.arguments?.getString(QUERY_ARG).orEmpty()
             ResultScreen(
